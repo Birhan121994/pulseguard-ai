@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Environment
+.env
+
+# Database
+*.db
+*.sqlite
+
+# Reflex
+.reflex/
+.web/
+
+# IDE
+.vscode/
+.idea/
+
+# Data (large log files)
+data/logs/*.log
+data/logs/*.txt
+data/synthetic/*.json
