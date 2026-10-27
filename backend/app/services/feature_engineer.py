@@ -77,33 +77,42 @@ def parsed_lines_to_dataframe(parsed_lines: list[dict]) -> pd.DataFrame:
     return df
 
 
+
 def build_window_features(
     df: pd.DataFrame,
-    window_minutes: int = 1,
+    window_minutes: float = 1,
 ) -> pd.DataFrame:
     """
-    Build fixed-size, minute-aligned log feature windows.
+    Build fixed-size, UTC-aligned log feature windows.
 
-    Empty windows between the first and last timestamps are retained.
-    Windows outside the observed time range are not fabricated.
+    Supports fractional minutes, e.g. 1/6 minute = 10 seconds.
+    Empty windows between observed timestamps are retained.
     """
-    if not isinstance(window_minutes, int) or isinstance(window_minutes, bool):
-        raise ValueError("window_minutes must be an integer")
+    if (
+        not isinstance(window_minutes, (int, float))
+        or isinstance(window_minutes, bool)
+        or not np.isfinite(window_minutes)
+    ):
+        raise ValueError("window_minutes must be a finite number")
 
-    if not 1 <= window_minutes <= 1440:
-        raise ValueError("window_minutes must be between 1 and 1440")
+    if not 0 < window_minutes <= 1440:
+        raise ValueError(
+            "window_minutes must be greater than 0 and at most 1440"
+        )
 
     if df.empty:
         return pd.DataFrame(columns=FEATURE_COLUMNS)
 
-    missing = [column for column in REQUIRED_COLUMNS if column not in df.columns]
+    missing = [
+        column for column in REQUIRED_COLUMNS
+        if column not in df.columns
+    ]
     if missing:
         raise ValueError(
             f"DataFrame is missing required fields: {', '.join(missing)}"
         )
 
     work = df.copy()
-
     work["timestamp"] = pd.to_datetime(
         work["timestamp"], errors="coerce", utc=True
     )
@@ -113,20 +122,32 @@ def build_window_features(
         return pd.DataFrame(columns=FEATURE_COLUMNS)
 
     work["level"] = (
-        work["level"].fillna("UNKNOWN").astype(str).str.strip().str.upper()
+        work["level"]
+        .fillna("UNKNOWN")
+        .astype(str)
+        .str.strip()
+        .str.upper()
     )
     work["service"] = (
-        work["service"].fillna("unknown").astype(str).replace("", "unknown")
+        work["service"]
+        .fillna("unknown")
+        .astype(str)
+        .replace("", "unknown")
     )
     work["cluster_id"] = (
-        work["cluster_id"].fillna("unknown").astype(str).replace("", "unknown")
+        work["cluster_id"]
+        .fillna("unknown")
+        .astype(str)
+        .replace("", "unknown")
     )
 
     work = work.set_index("timestamp").sort_index()
 
-    # UTC and a fixed origin make window assignment consistent.
+    # Use a real timedelta so fractional-minute windows work reliably.
+    window_size = pd.to_timedelta(window_minutes, unit="min")
+
     grouped = work.resample(
-        f"{window_minutes}min",
+        window_size,
         origin="epoch",
         closed="left",
         label="left",
@@ -151,11 +172,17 @@ def build_window_features(
             })
             continue
 
-        error_count = int((window_df["level"] == "ERROR").sum())
-        warn_count = int((window_df["level"] == "WARN").sum())
+        error_count = int(
+            (window_df["level"] == "ERROR").sum()
+        )
+        warn_count = int(
+            (window_df["level"] == "WARN").sum()
+        )
 
         template_counts = window_df["cluster_id"].value_counts()
-        probabilities = template_counts.to_numpy(dtype=float) / total
+        probabilities = (
+            template_counts.to_numpy(dtype=float) / total
+        )
 
         entropy = (
             -float(np.sum(probabilities * np.log2(probabilities)))
@@ -187,6 +214,7 @@ def build_window_features(
     return features_df[FEATURE_COLUMNS].replace(
         [np.inf, -np.inf], np.nan
     ).fillna(0)
+
 
 
 def select_model_features(features_df: pd.DataFrame) -> pd.DataFrame:
