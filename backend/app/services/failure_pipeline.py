@@ -119,15 +119,15 @@ def run_training_pipeline(raw_text: str) -> dict:
             "message": "No services found in the training logs",
         }
 
-    print("Services:", label_data["services"])
-    print("Training windows:", len(aligned_features))
+    # print("Services:", label_data["services"])
+    # print("Training windows:", len(aligned_features))
 
     for service, labels in label_data["label_matrix"].items():
-        print(
-            f"{service}: labels={labels}, "
-            f"positive={sum(labels)}, "
-            f"negative={len(labels) - sum(labels)}"
-        )
+        # print(
+        #     f"{service}: labels={labels}, "
+        #     f"positive={sum(labels)}, "
+        #     f"negative={len(labels) - sum(labels)}"
+        # )
 
         service_df = service_features[service]
 

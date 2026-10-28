@@ -13,16 +13,19 @@ class TrainRequest(BaseModel):
     raw_text: str
 
 
+
 class PredictionItem(BaseModel):
     service: str
-    risk: float
-    risk_percent: float
+    risk: float | None = None
+    risk_percent: float | None = None
     risk_level: str
+    message: str | None = None
+
 
 
 class PredictResponse(BaseModel):
     predictions: list[PredictionItem]
-    window_start: str | None
+    window_start: str | None = None
     horizon_minutes: int
     model_loaded: bool
 

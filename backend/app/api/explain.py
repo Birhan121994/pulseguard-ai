@@ -16,7 +16,7 @@ class ExplainRequest(BaseModel):
     contamination: float = 0.15
     eps: float = 0.35
     min_samples: int = 2
-    max_incidents: int = 3
+    max_incidents: int = 5
 
 
 class ExplainedIncident(BaseModel):
@@ -111,7 +111,7 @@ def explain_seed(
     contamination: float = 0.15,
     eps: float = 0.35,
     min_samples: int = 2,
-    max_incidents: int = 3,
+    max_incidents: int = 5,
 ):
     """
     One-click demo: run the full pipeline with LLM explanation on seed logs.

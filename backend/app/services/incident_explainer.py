@@ -76,10 +76,10 @@ def explain_incident(incident: dict) -> dict:
         }
 
 
-def explain_all_incidents(incidents: list[dict], max_incidents: int = 3) -> list[dict]:
+def explain_all_incidents(incidents: list[dict], max_incidents: int = 5) -> list[dict]:
     """
     Explain the top N incidents (sorted by severity/size already in Step 4).
-    Limits to 3 by default to avoid burning through Groq rate limits.
+    Limits to 5 by default to avoid burning through Groq rate limits.
     """
     explained = []
     for incident in incidents[:max_incidents]:
