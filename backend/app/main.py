@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -14,14 +15,18 @@ app = FastAPI(
     docs_url="/docs",
 )
 
+allowed_origins = ["*"] if os.getenv("DEBUG") == "True" else [
+    "https://your-frontend-url.reflex.run",  # update after frontend deploy
+    "https://your-frontend-url.hf.space",     # if using HuggingFace
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 app.include_router(logs.router)
 app.include_router(anomalies.router)
 app.include_router(incidents.router)
