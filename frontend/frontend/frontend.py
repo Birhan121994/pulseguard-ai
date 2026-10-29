@@ -8,16 +8,19 @@ from pulseguard.components import (
     anomaly_timeline_card,
     incident_card,
     risk_gauge,
-    cofailure_heatmap_card,     
-    template_trend_card,          
+    cofailure_heatmap_card,
+    template_trend_card,
+    analysis_progress_card,
 )
 
 
 def dashboard() -> rx.Component:
     return rx.box(
         navbar(),
+
         rx.container(
             rx.vstack(
+                # Page header
                 rx.vstack(
                     rx.heading(
                         "Real-time Log Intelligence",
@@ -37,7 +40,17 @@ def dashboard() -> rx.Component:
                     align="center",
                     padding_y="2rem",
                 ),
+
+                # Log input
                 log_input_card(),
+
+                # Analysis progress panel
+                rx.cond(
+                    PulseGuardState.progress_status != "idle",
+                    analysis_progress_card(),
+                ),
+
+                # Loading placeholders
                 rx.cond(
                     PulseGuardState.is_loading,
                     rx.vstack(
@@ -54,23 +67,36 @@ def dashboard() -> rx.Component:
                         spacing="3",
                         width="100%",
                     ),
+
+                    # Results
                     rx.cond(
                         PulseGuardState.has_results,
                         rx.vstack(
+                            # Anomaly timeline
                             anomaly_timeline_card(),
+
+                            # Dependency visualizations
                             rx.grid(
                                 cofailure_heatmap_card(),
                                 template_trend_card(),
-                                columns=rx.breakpoints(initial="1", lg="2"),
+                                columns=rx.breakpoints(
+                                    initial="1",
+                                    lg="2",
+                                ),
                                 spacing="3",
                                 width="100%",
                             ),
+
+                            # Incident analysis
                             rx.cond(
                                 PulseGuardState.show_incidents,
                                 rx.vstack(
                                     rx.hstack(
                                         rx.icon("layers", size=20),
-                                        rx.heading("Incidents", size="4"),
+                                        rx.heading(
+                                            "Incidents",
+                                            size="4",
+                                        ),
                                         rx.badge(
                                             PulseGuardState.incident_count.to_string()
                                             + " grouped",
@@ -80,6 +106,7 @@ def dashboard() -> rx.Component:
                                         spacing="2",
                                         align="center",
                                     ),
+
                                     rx.grid(
                                         rx.foreach(
                                             PulseGuardState.incidents,
@@ -92,12 +119,15 @@ def dashboard() -> rx.Component:
                                         spacing="3",
                                         width="100%",
                                     ),
+
                                     spacing="3",
                                     width="100%",
                                     align="start",
                                 ),
                                 rx.fragment(),
                             ),
+
+                            # Failure predictions
                             rx.cond(
                                 PulseGuardState.show_predictions,
                                 rx.vstack(
@@ -115,6 +145,7 @@ def dashboard() -> rx.Component:
                                         spacing="2",
                                         align="center",
                                     ),
+
                                     rx.grid(
                                         rx.foreach(
                                             PulseGuardState.predictions,
@@ -132,11 +163,13 @@ def dashboard() -> rx.Component:
                                         spacing="3",
                                         width="100%",
                                     ),
+
                                     spacing="3",
                                     width="100%",
                                 ),
                                 rx.fragment(),
                             ),
+
                             spacing="5",
                             width="100%",
                             padding_y="1.5rem",
@@ -144,6 +177,7 @@ def dashboard() -> rx.Component:
                         rx.fragment(),
                     ),
                 ),
+
                 spacing="4",
                 width="100%",
                 max_width="1100px",
@@ -152,6 +186,7 @@ def dashboard() -> rx.Component:
             ),
             width="100%",
         ),
+
         min_height="100vh",
         background="var(--color-background)",
         color="var(--gray-12)",

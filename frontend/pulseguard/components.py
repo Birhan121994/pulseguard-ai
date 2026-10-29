@@ -40,29 +40,61 @@ def log_input_card() -> rx.Component:
             rx.hstack(
                 rx.icon("file-text", size=20),
                 rx.heading("Paste Your Logs", size="4"),
-                rx.spacer(),
-                rx.button(
-                    "Load Demo",
+                rx.badge(
+                    f"{PulseGuardState.log_line_count} lines",
+                    color_scheme="gray",
                     variant="soft",
-                    size="2",
-                    on_click=PulseGuardState.load_seed_demo,
-                    icon="play",
+                    size="1",
+                ),
+                rx.spacer(),
+                rx.hstack(
+                    rx.checkbox(
+                        "Auto-analyze",
+                        checked=PulseGuardState.auto_analyze_after_sim,
+                        on_change=PulseGuardState.set_auto_analyze_after_sim,
+                        size="1",
+                    ),
+                    rx.button(
+                        PulseGuardState.simulate_button_label,
+                        variant="soft",
+                        color_scheme="teal",
+                        size="2",
+                        on_click=PulseGuardState.simulate_live_feed,
+                        loading=PulseGuardState.is_simulating,
+                        disabled=PulseGuardState.is_simulating,
+                        icon="play",
+                    ),
+                    rx.button(
+                        "Load Demo",
+                        variant="ghost",
+                        size="2",
+                        on_click=PulseGuardState.load_seed_demo,
+                        disabled=PulseGuardState.is_simulating,
+                    ),
+                    spacing="2",
+                    align="center",
                 ),
                 width="100%",
                 align="center",
             ),
             rx.text_area(
-                placeholder=(
-                    "Paste server/application logs here...\n\n"
-                    "Expected format:\n"
-                    "2026-10-27 10:00:01 INFO [service] message"
-                ),
+                placeholder="Paste server/application logs here...\n\nExpected format:\n2026-10-27 10:00:01 INFO [service] message",
                 value=PulseGuardState.raw_logs,
                 on_change=PulseGuardState.set_raw_logs,
-                height="160px",
+                height="200px",
                 font_family="monospace",
                 font_size="13px",
                 width="100%",
+                disabled=PulseGuardState.is_simulating,
+            ),
+            rx.cond(
+                PulseGuardState.is_simulating,
+                rx.hstack(
+                    rx.spinner(size="1"),
+                    rx.text("Streaming logs...", size="1", color="var(--gray-10)"),
+                    spacing="2",
+                    align="center",
+                ),
             ),
             rx.hstack(
                 rx.cond(
@@ -73,14 +105,13 @@ def log_input_card() -> rx.Component:
                         color_scheme="red",
                         size="1",
                     ),
-                    rx.fragment(),
                 ),
                 rx.spacer(),
                 rx.button(
                     "Analyze Logs",
                     on_click=PulseGuardState.analyze_logs,
                     loading=PulseGuardState.is_loading,
-                    disabled=PulseGuardState.is_loading,
+                    disabled=PulseGuardState.is_loading | PulseGuardState.is_simulating,
                     size="3",
                     icon="scan-search",
                 ),
@@ -364,3 +395,152 @@ def template_trend_card() -> rx.Component:
         width="100%",
         size="3",
     )
+
+
+
+def _analysis_step(
+    number: int,
+    title: str,
+    endpoint: str,
+) -> rx.Component:
+    is_done = PulseGuardState.completed_steps.contains(number)
+    is_current = PulseGuardState.progress_step == number
+
+    return rx.hstack(
+        rx.cond(
+            is_done,
+            rx.icon("check", color="green", size=20),
+            rx.cond(
+                is_current,
+                rx.spinner(size="2", color="var(--accent-9)"),
+                rx.icon("circle", color="var(--gray-8)", size=20),
+            ),
+        ),
+        rx.vstack(
+            rx.text(title, size="2", weight="medium"),
+            rx.text(
+                endpoint,
+                size="1",
+                color="var(--gray-10)",
+                font_family="monospace",
+            ),
+            align="start",
+            spacing="1",
+        ),
+        rx.spacer(),
+        rx.cond(
+            is_done,
+            rx.badge("Completed", color_scheme="green", size="1"),
+            rx.cond(
+                is_current,
+                rx.badge("Running", color_scheme="teal", size="1"),
+                rx.badge("Waiting", color_scheme="gray", size="1"),
+            ),
+        ),
+        align="center",
+        width="100%",
+        spacing="3",
+        padding_y="2",
+    )
+
+
+def analysis_progress_card() -> rx.Component:
+    return rx.card(
+        rx.vstack(
+            # Header
+            rx.hstack(
+                rx.icon("activity", size=22, color="var(--accent-9)"),
+                rx.heading("Analysis Progress", size="4"),
+                rx.spacer(),
+                rx.cond(
+                    PulseGuardState.progress_status == "completed",
+                    rx.badge("Completed", color_scheme="green"),
+                    rx.cond(
+                        PulseGuardState.progress_status == "error",
+                        rx.badge("Failed", color_scheme="red"),
+                        rx.cond(
+                            PulseGuardState.progress_status == "running",
+                            rx.badge("Processing", color_scheme="teal"),
+                            rx.badge("Ready", color_scheme="gray"),
+                        ),
+                    ),
+                ),
+                width="100%",
+                align="center",
+            ),
+
+            # Current activity
+            rx.text(
+                PulseGuardState.progress_message,
+                size="2",
+                color="var(--gray-11)",
+            ),
+
+            # Overall progress: five steps, 20% each
+            rx.progress(
+                value=PulseGuardState.progress_step * 20,
+                max=100,
+                width="100%",
+                color_scheme="teal",
+            ),
+
+            rx.text(
+                PulseGuardState.progress_step.to_string()
+                + " of 5 steps",
+                size="1",
+                color="var(--gray-10)",
+            ),
+
+            rx.divider(),
+
+            # Step 1
+            _analysis_step(
+                1,
+                "Detect anomalies",
+                "POST /api/anomalies/detect",
+            ),
+
+            rx.divider(),
+
+            # Step 2
+            _analysis_step(
+                2,
+                "Explain incidents and root causes",
+                "POST /api/incidents/explain",
+            ),
+
+            rx.divider(),
+
+            # Step 3
+            _analysis_step(
+                3,
+                "Predict potential failures",
+                "POST /api/predict/failure",
+            ),
+
+            rx.divider(),
+
+            # Step 4
+            _analysis_step(
+                4,
+                "Load service co-failure data",
+                "GET /api/dependencies/cofailure/seed",
+            ),
+
+            rx.divider(),
+
+            # Step 5
+            _analysis_step(
+                5,
+                "Load log template trends",
+                "GET /api/dependencies/templates/seed",
+            ),
+
+            spacing="3",
+            width="100%",
+            align="start",
+        ),
+        width="100%",
+        size="3",
+    )
+

@@ -1,3 +1,4 @@
+import asyncio
 import reflex as rx
 import httpx
 import plotly.graph_objects as go
@@ -42,7 +43,13 @@ class PulseGuardState(rx.State):
     show_incidents: bool = False
     show_predictions: bool = False
 
-    
+    # Analysis progress
+    progress_step: int = 0
+    progress_message: str = "Ready to analyze logs."
+    progress_status: str = "idle"
+    completed_steps: list[int] = []
+
+
     # Co-failure heatmap data
     cofailure_services: list[str] = []
     cofailure_matrix: list[list[int]] = []
@@ -54,6 +61,72 @@ class PulseGuardState(rx.State):
     selected_template_label: str = ""
     template_series: list[dict] = []
 
+    is_simulating: bool = False
+    auto_analyze_after_sim: bool = False
+    simulation_lines: list[str] = []
+
+    @rx.var
+    def simulate_button_label(self) -> str:
+        return "Simulating..." if self.is_simulating else "Play Live Demo"
+
+    @rx.event
+    def set_auto_analyze_after_sim(self, value: bool):
+        self.auto_analyze_after_sim = value
+
+    @rx.var
+    def log_line_count(self) -> int:
+        return len([l for l in self.raw_logs.split("\n") if l.strip()])
+
+    @rx.event
+    async def simulate_live_feed(self):
+        """
+        Stream synthetic log lines into the textarea one by one.
+
+        Each yield sends a state update to the frontend, so the user
+        watches the logs appear in real time—like a live tail.
+        """
+        if self.is_simulating:
+            return
+
+        # Build the simulation script: a realistic cascading failure
+        self.simulation_lines = [
+            "2026-10-27 10:00:01 INFO [api-gateway] Request received path=/api/orders status=200",
+            "2026-10-27 10:00:05 INFO [api-gateway] Request received path=/api/users status=200",
+            "2026-10-27 10:00:10 INFO [order-service] Processing order orderId=1001",
+            "2026-10-27 10:00:15 INFO [payment-service] Payment initiated paymentId=2001",
+            "2026-10-27 10:00:16 ERROR [payment-service] Payment failed reason=connection_timeout",
+            "2026-10-27 10:00:17 ERROR [payment-service] Payment failed reason=connection_timeout",
+            "2026-10-27 10:00:18 ERROR [payment-service] Payment failed reason=connection_timeout",
+            "2026-10-27 10:00:19 ERROR [payment-service] Payment failed reason=db_pool_exhausted",
+            "2026-10-27 10:00:20 ERROR [payment-service] Payment failed reason=db_pool_exhausted",
+            "2026-10-27 10:00:22 ERROR [api-gateway] Upstream timeout service=payment-service status=504",
+            "2026-10-27 10:00:23 ERROR [order-service] Order failed orderId=1001 reason=payment_timeout",
+            "2026-10-27 10:00:25 INFO [api-gateway] Health check status=degraded",
+            "2026-10-27 10:00:28 ERROR [payment-service] Payment failed reason=db_pool_exhausted",
+            "2026-10-27 10:00:30 ERROR [payment-service] Payment failed reason=db_pool_exhausted",
+            "2026-10-27 10:00:32 ERROR [api-gateway] Upstream timeout service=payment-service status=504",
+        ]
+
+        # Reset the textarea and results
+        self.raw_logs = ""
+        self.is_simulating = True
+        self.error_message = ""
+        yield  # show "Simulating..." immediately
+
+        try:
+            for line in self.simulation_lines:
+                self.raw_logs += line + "\n"
+                await asyncio.sleep(0.8)  # 800ms between lines—dramatic pacing
+                yield  # push each line to the UI
+
+        finally:
+            self.is_simulating = False
+            yield  # final update: button label returns to "Play Live Demo"
+
+        # Auto-analyze if enabled
+        if self.auto_analyze_after_sim:
+            async for _ in self.analyze_logs():
+                yield
 
     @rx.var(cache=True)
     def has_results(self) -> bool:
@@ -152,6 +225,7 @@ class PulseGuardState(rx.State):
         )
         return fig
 
+    
     @rx.event
     async def analyze_logs(self):
         if not self.raw_logs.strip():
@@ -160,6 +234,11 @@ class PulseGuardState(rx.State):
 
         self.is_loading = True
         self.error_message = ""
+        self.progress_step = 0
+        self.progress_message = "Preparing log analysis..."
+        self.progress_status = "running"
+        self.completed_steps = []
+
         self.anomaly_windows = []
         self.incidents = []
         self.predictions = []
@@ -169,7 +248,11 @@ class PulseGuardState(rx.State):
 
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
-                # 1. Detect anomalies
+                # Step 1: Detect anomalies
+                self.progress_step = 1
+                self.progress_message = "Detecting anomalies in log windows..."
+                yield
+
                 anomaly_resp = await client.post(
                     f"{API_BASE}/api/anomalies/detect",
                     json={
@@ -178,18 +261,20 @@ class PulseGuardState(rx.State):
                         "contamination": 0.15,
                     },
                 )
-
-                if anomaly_resp.status_code != 200:
-                    self.error_message = (
-                        f"Anomaly detection failed: {anomaly_resp.text}"
-                    )
-                    return
-
+                anomaly_resp.raise_for_status()
                 anomaly_data = anomaly_resp.json()
+
                 self.anomaly_windows = anomaly_data.get("windows", [])
                 self.summary = anomaly_data.get("summary", {})
+                self.completed_steps.append(1)
 
-                # 2. Cluster incidents and explain root causes
+                # Step 2: Explain incidents
+                self.progress_step = 2
+                self.progress_message = (
+                    "Clustering incidents and identifying root causes..."
+                )
+                yield
+
                 explain_resp = await client.post(
                     f"{API_BASE}/api/incidents/explain",
                     json={
@@ -209,13 +294,18 @@ class PulseGuardState(rx.State):
                         for item in explain_data.get("incidents", [])
                     ]
                     self.show_incidents = bool(self.incidents)
+                    self.completed_steps.append(2)
                 else:
                     self.error_message = (
                         "Incident analysis warning: "
                         f"{explain_resp.text}"
                     )
 
-                # 3. Predict potential failures
+                # Step 3: Predict failures
+                self.progress_step = 3
+                self.progress_message = "Predicting potential service failures..."
+                yield
+
                 predict_resp = await client.post(
                     f"{API_BASE}/api/predict/failure",
                     json={"raw_text": self.raw_logs},
@@ -228,6 +318,7 @@ class PulseGuardState(rx.State):
                         for item in predict_data.get("predictions", [])
                     ]
                     self.show_predictions = bool(self.predictions)
+                    self.completed_steps.append(3)
                 else:
                     warning = (
                         "Failure prediction warning: "
@@ -238,22 +329,89 @@ class PulseGuardState(rx.State):
                         if self.error_message
                         else warning
                     )
-                await self._load_dependencies()
+
+                # Step 4: Load co-failure dependencies
+                self.progress_step = 4
+                self.progress_message = (
+                    "Loading service co-failure dependencies..."
+                )
+                yield
+
+                cf_resp = await client.get(
+                    f"{API_BASE}/api/dependencies/cofailure/seed"
+                )
+                cf_resp.raise_for_status()
+                cf_data = cf_resp.json()
+
+                self.cofailure_services = cf_data.get("services", [])
+                self.cofailure_matrix = cf_data.get("matrix", [])
+                self.cofailure_pairs = cf_data.get("pairs", [])
+                self.cofailure_max = cf_data.get("max_count", 0)
+                self.completed_steps.append(4)
+
+                # Step 5: Load template trends
+                self.progress_step = 5
+                self.progress_message = "Loading log template trends..."
+                yield
+
+                tpl_resp = await client.get(
+                    f"{API_BASE}/api/dependencies/templates/seed"
+                )
+                tpl_resp.raise_for_status()
+                tpl_data = tpl_resp.json()
+                self.templates = tpl_data.get("templates", [])
+
+                payment = next(
+                    (
+                        t for t in self.templates
+                        if t.get("template", "").startswith("Payment failed")
+                    ),
+                    None,
+                )
+                selected = payment or (
+                    self.templates[0] if self.templates else None
+                )
+
+                if selected:
+                    self.selected_template_label = (
+                        "Payment failed"
+                        if selected["template"].startswith("Payment failed")
+                        else selected["template"]
+                    )
+                    self.template_series = selected.get("series", [])
+                else:
+                    self.selected_template_label = ""
+                    self.template_series = []
+
+                self.completed_steps.append(5)
+                self.progress_status = "completed"
+                self.progress_message = "Analysis completed successfully."
+                yield
+
+        except httpx.HTTPStatusError as exc:
+            self.progress_status = "error"
+            self.progress_message = "A backend endpoint returned an error."
+            self.error_message = (
+                f"HTTP {exc.response.status_code} from "
+                f"{exc.request.url}: {exc.response.text}"
+            )
 
         except httpx.RequestError as exc:
+            self.progress_status = "error"
+            self.progress_message = "Could not connect to the backend."
             self.error_message = (
-                "Cannot connect to the backend. "
-                f"Check that the API is running at {API_BASE}. "
-                f"Details: {exc}"
+                f"Cannot connect to the backend at {API_BASE}. Details: {exc}"
             )
 
         except Exception as exc:
-            self.error_message = (
-                f"Backend error: {type(exc).__name__}: {exc}"
-            )
+            self.progress_status = "error"
+            self.progress_message = "Analysis failed unexpectedly."
+            self.error_message = f"Backend error: {type(exc).__name__}: {exc}"
 
         finally:
             self.is_loading = False
+            yield
+
 
     
 
@@ -485,6 +643,10 @@ class PulseGuardState(rx.State):
 2026-10-27 10:00:35 INFO [api-gateway] Request received path=/api/orders status=200
 2026-10-27 10:00:40 INFO [api-gateway] Request received path=/api/users status=200"""
         self.error_message = ""
+        self.progress_step = 0
+        self.progress_status = "idle"
+        self.progress_message = "Ready to analyze logs."
+        self.completed_steps = []
 
 
 
