@@ -8,6 +8,8 @@ from pulseguard.components import (
     anomaly_timeline_card,
     incident_card,
     risk_gauge,
+    cofailure_heatmap_card,     
+    template_trend_card,          
 )
 
 
@@ -56,6 +58,13 @@ def dashboard() -> rx.Component:
                         PulseGuardState.has_results,
                         rx.vstack(
                             anomaly_timeline_card(),
+                            rx.grid(
+                                cofailure_heatmap_card(),
+                                template_trend_card(),
+                                columns=rx.breakpoints(initial="1", lg="2"),
+                                spacing="3",
+                                width="100%",
+                            ),
                             rx.cond(
                                 PulseGuardState.show_incidents,
                                 rx.vstack(

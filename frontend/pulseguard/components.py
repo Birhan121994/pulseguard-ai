@@ -279,3 +279,88 @@ def risk_gauge(
         border="1px solid var(--gray-a4)",
         width="100%",
     )
+
+
+def cofailure_heatmap_card() -> rx.Component:
+    return rx.card(
+        rx.vstack(
+            rx.hstack(
+                rx.icon("git-merge", size=20),
+                rx.heading("Service Co-Failure Heatmap", size="4"),
+                rx.spacer(),
+                rx.badge(
+                    f"{PulseGuardState.cofailure_pairs.length()} pairs",
+                    color_scheme="red",
+                    variant="soft",
+                ),
+                width="100%",
+                align="center",
+            ),
+            rx.text(
+                "Darker cells indicate services that fail together more often.",
+                size="1",
+                color="var(--gray-10)",
+            ),
+            rx.plotly(data=PulseGuardState.cofailure_figure, width="100%"),
+            rx.cond(
+                PulseGuardState.cofailure_pairs.length() > 0,
+                rx.vstack(
+                    rx.text("Top co-failing pairs:", size="1", weight="medium"),
+                    rx.foreach(
+                        PulseGuardState.cofailure_pairs[:3],
+                        lambda p: rx.hstack(
+                            rx.badge(p["service_a"], variant="soft", size="1"),
+                            rx.text("↔", size="1"),
+                            rx.badge(p["service_b"], variant="soft", size="1"),
+                            rx.spacer(),
+                            rx.text(f"{p['count']}x", size="1", color="var(--gray-10)"),
+                            width="100%",
+                        ),
+                    ),
+                    spacing="1",
+                    width="100%",
+                ),
+            ),
+            spacing="2",
+            width="100%",
+        ),
+        width="100%",
+        size="3",
+    )
+
+
+
+
+def template_trend_card() -> rx.Component:
+    return rx.card(
+        rx.vstack(
+            rx.hstack(
+                rx.icon("trending-up", size=20),
+                rx.heading("Template Trend Explorer", size="4"),
+                rx.spacer(),
+                rx.select(
+                    PulseGuardState.template_options,
+                    value=PulseGuardState.selected_template_label,
+                    on_change=PulseGuardState.select_template,
+                    placeholder="Select a template...",
+                    width="300px",
+                ),
+                width="100%",
+                align="center",
+            ),
+            rx.text(
+                "Click a template to see its frequency over time. "
+                "Red bands mark anomalous windows.",
+                size="1",
+                color="var(--gray-10)",
+            ),
+            rx.plotly(
+                data=PulseGuardState.template_trend_figure,
+                width="100%",
+            ),
+            spacing="2",
+            width="100%",
+        ),
+        width="100%",
+        size="3",
+    )

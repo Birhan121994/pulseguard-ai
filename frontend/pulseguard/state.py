@@ -2,7 +2,8 @@ import reflex as rx
 import httpx
 import plotly.graph_objects as go
 from typing import Optional
-
+import plotly.express as px
+from datetime import datetime, timedelta
 
 API_BASE = "http://localhost:8000"
 
@@ -41,9 +42,27 @@ class PulseGuardState(rx.State):
     show_incidents: bool = False
     show_predictions: bool = False
 
+    
+    # Co-failure heatmap data
+    cofailure_services: list[str] = []
+    cofailure_matrix: list[list[int]] = []
+    cofailure_pairs: list[dict] = []
+    cofailure_max: int = 0
+
+    # Template trend data
+    templates: list[dict] = []
+    selected_template_label: str = ""
+    template_series: list[dict] = []
+
+
     @rx.var(cache=True)
     def has_results(self) -> bool:
-        return bool(self.anomaly_windows or self.incidents)
+        return bool(
+            self.anomaly_windows
+            or self.incidents
+            or self.cofailure_services
+            or self.templates
+        )
 
     @rx.var(cache=True)
     def anomaly_count(self) -> int:
@@ -219,6 +238,7 @@ class PulseGuardState(rx.State):
                         if self.error_message
                         else warning
                     )
+                await self._load_dependencies()
 
         except httpx.RequestError as exc:
             self.error_message = (
@@ -235,6 +255,221 @@ class PulseGuardState(rx.State):
         finally:
             self.is_loading = False
 
+    
+
+    @rx.var
+    def cofailure_figure(self) -> go.Figure:
+        if not self.cofailure_services or not self.cofailure_matrix:
+            fig = go.Figure()
+            fig.update_layout(
+                title="Service Co-Failure Heatmap",
+                height=400,
+                margin=dict(l=20, r=20, t=40, b=20),
+            )
+            return fig
+
+        fig = go.Figure(data=go.Heatmap(
+            z=self.cofailure_matrix,
+            x=self.cofailure_services,
+            y=self.cofailure_services,
+            colorscale="Reds",
+            zmin=0,
+            zmax=self.cofailure_max if self.cofailure_max > 0 else 1,
+            text=[[str(v) if v > 0 else "" for v in row] for row in self.cofailure_matrix],
+            texttemplate="%{text}",
+            textfont={"size": 12},
+            hovertemplate="<b>%{y}</b> ↔ <b>%{x}</b><br>Co-failures: %{z}<extra></extra>",
+        ))
+        fig.update_layout(
+            title="Service Co-Failure Heatmap",
+            xaxis_title="Service",
+            yaxis_title="Service",
+            template="plotly_white",
+            height=400,
+            margin=dict(l=60, r=20, t=40, b=60),
+        )
+        return fig
+
+    @rx.var
+    def template_options(self) -> list[str]:
+        """Display readable template labels in the dropdown."""
+        labels = []
+
+        for template in self.templates:
+            text = template.get("template", "")
+            if text.startswith("Payment failed"):
+                label = "Payment failed"
+            else:
+                label = text
+
+            labels.append(label)
+
+        return labels
+
+    @rx.var
+    def template_trend_figure(self) -> go.Figure:
+        if not self.template_series:
+            fig = go.Figure()
+            fig.update_layout(
+                title="Template Trend Explorer",
+                height=300,
+                margin=dict(l=20, r=20, t=40, b=20),
+            )
+            return fig
+
+        timestamps = [p["window_start"] for p in self.template_series]
+        counts = [p["count"] for p in self.template_series]
+
+        # Find matching template for title
+        selected = next(
+            (
+                t for t in self.templates
+                if (
+                    "Payment failed"
+                    if t.get("template", "").startswith("Payment failed")
+                    else t.get("template", "")
+                ) == self.selected_template_label
+            ),
+            None,
+        )
+
+        title = (
+            selected["template"][:60] + "..."
+            if selected and len(selected["template"]) > 60
+            else selected["template"] if selected else "Template"
+        )
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=timestamps,
+            y=counts,
+            marker_color="#0d9488",
+            name="Frequency",
+            hovertemplate="<b>%{x}</b><br>Count: %{y}<extra></extra>",
+        ))
+
+        # Overlay anomalous windows with a visible time width.
+        for window in self.anomaly_windows:
+            if not window.get("is_anomaly", False):
+                continue
+
+            start = window.get("window_start")
+            if not start:
+                continue
+
+            try:
+                start_dt = datetime.fromisoformat(
+                    start.replace("Z", "+00:00")
+                )
+                end_dt = start_dt + timedelta(minutes=1)
+
+                fig.add_vrect(
+                    x0=start_dt,
+                    x1=end_dt,
+                    fillcolor="red",
+                    opacity=0.22,
+                    line_width=0,
+                    layer="below",
+                )
+            except (ValueError, TypeError):
+                continue
+
+
+        fig.update_layout(
+            title=f"Trend: {title}",
+            xaxis_title="Time Window",
+            yaxis_title="Frequency",
+            template="plotly_white",
+            height=300,
+            margin=dict(l=20, r=20, t=50, b=20),
+            showlegend=False,
+        )
+        return fig
+
+    async def _load_dependencies(self):
+        """Load seeded co-failure and template analysis."""
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            cf_resp = await client.get(
+                f"{API_BASE}/api/dependencies/cofailure/seed"
+            )
+            cf_resp.raise_for_status()
+            cf_data = cf_resp.json()
+
+            self.cofailure_services = cf_data.get("services", [])
+            self.cofailure_matrix = cf_data.get("matrix", [])
+            self.cofailure_pairs = cf_data.get("pairs", [])
+            self.cofailure_max = cf_data.get("max_count", 0)
+
+            tpl_resp = await client.get(
+                f"{API_BASE}/api/dependencies/templates/seed"
+            )
+            tpl_resp.raise_for_status()
+            tpl_data = tpl_resp.json()
+
+            self.templates = tpl_data.get("templates", [])
+
+            # Select Payment failed by default.
+            payment = next(
+                (
+                    t for t in self.templates
+                    if t.get("template", "").startswith("Payment failed")
+                ),
+                None,
+            )
+
+            selected = payment or (
+                self.templates[0] if self.templates else None
+            )
+
+            if selected:
+                self.selected_template_label = (
+                    "Payment failed"
+                    if selected["template"].startswith("Payment failed")
+                    else selected["template"]
+                )
+                self.template_series = selected.get("series", [])
+            else:
+                self.selected_template_label = ""
+                self.template_series = []
+
+
+    @rx.event
+    async def load_dependencies(self):
+        """Public event for refreshing dependency data."""
+        try:
+            await self._load_dependencies()
+        except Exception as exc:
+            self.error_message = (
+                f"Could not load dependency data: {exc}"
+            )
+
+    def _update_template_series(self):
+        """Update the selected template's series."""
+        selected = next(
+            (t for t in self.templates if t["cluster_id"] == self.selected_template_id),
+            None,
+        )
+        self.template_series = selected["series"] if selected else []
+
+    @rx.event
+    def select_template(self, label: str):
+        self.selected_template_label = label
+
+        selected = next(
+            (
+                t for t in self.templates
+                if (
+                    "Payment failed"
+                    if t.get("template", "").startswith("Payment failed")
+                    else t.get("template", "")
+                ) == label
+            ),
+            None,
+        )
+
+        self.template_series = (
+            selected.get("series", []) if selected else []
+        )
     @rx.event
     def load_seed_demo(self):
         self.raw_logs = """2026-10-27 10:00:01 INFO [api-gateway] Request received path=/api/orders status=200

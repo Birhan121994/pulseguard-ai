@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.core.config import get_settings
 from backend.app.services.llm_client import health_check_llm
-from backend.app.api import logs, anomalies, incidents, explain, predict
+from backend.app.api import logs, anomalies, incidents, explain, predict, dependencies
 
 settings = get_settings()
 
@@ -27,6 +27,7 @@ app.include_router(anomalies.router)
 app.include_router(incidents.router)
 app.include_router(explain.router)
 app.include_router(predict.router)
+app.include_router(dependencies.router)
 
 @app.get("/")
 def root():
