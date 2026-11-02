@@ -1,20 +1,21 @@
+
 import logging
 import os
 import re
 from collections import defaultdict
-from datetime import timedelta
 
 import numpy as np
 import pandas as pd
 from google import genai
+from google.genai import types
 from sklearn.cluster import DBSCAN
 
 logger = logging.getLogger(__name__)
 
-# Initialize Gemini client lazily (module-level import is fine, but client
-# creation is deferred until first use to avoid startup failures if the
-# API key is missing in some test environments).
 _GEMINI_CLIENT = None
+
+EMBEDDING_MODEL = "gemini-embedding-2"
+EMBEDDING_DIMENSIONS = 768
 
 FAILURE_PATTERN = re.compile(
     r"\b("
@@ -44,11 +45,12 @@ def get_gemini_client() -> genai.Client:
 
     if _GEMINI_CLIENT is None:
         api_key = os.getenv("GEMINI_API_KEY")
+
         if not api_key:
             raise RuntimeError(
-                "GEMINI_API_KEY environment variable is not set. "
-                "Get a free key at https://aistudio.google.com/apikey"
+                "GEMINI_API_KEY environment variable is not set."
             )
+
         _GEMINI_CLIENT = genai.Client(api_key=api_key)
 
     return _GEMINI_CLIENT
@@ -56,41 +58,77 @@ def get_gemini_client() -> genai.Client:
 
 def _get_embeddings(texts: list[str]) -> np.ndarray:
     """
-    Generate embeddings for a list of texts using Gemini's text-embedding-004.
+    Generate one independent embedding per input text.
 
-    Returns a 2D numpy array with one row per input text and 768 columns.
-    Raises RuntimeError if the API call fails or returns an unexpected shape.
+    Gemini Embedding 2 supports multiple Content objects in one
+    request. Each Content object represents an independent input.
     """
+    if not texts:
+        return np.empty((0, EMBEDDING_DIMENSIONS), dtype=np.float32)
+
     client = get_gemini_client()
 
-    # Gemini's embed_content accepts a list of contents for batch embedding
+    contents = [
+        types.Content(
+            parts=[
+                types.Part.from_text(
+                    text=f"task: clustering | query: {text}"
+                )
+            ]
+        )
+        for text in texts
+    ]
+
     result = client.models.embed_content(
-        model="gemini-embedding-2",
-        contents=texts,
-        config={
-            "task_type": "CLUSTERING",  # optimal for DBSCAN clustering
-        },
+        model=EMBEDDING_MODEL,
+        contents=contents,
+        config=types.EmbedContentConfig(
+            output_dimensionality=EMBEDDING_DIMENSIONS,
+        ),
     )
 
-    if not result.embeddings or len(result.embeddings) != len(texts):
+    returned_embeddings = result.embeddings or []
+
+    if len(returned_embeddings) != len(texts):
         raise RuntimeError(
-            f"Gemini returned {len(result.embeddings or [])} embeddings "
+            f"Gemini returned {len(returned_embeddings)} embeddings "
             f"for {len(texts)} input texts"
         )
 
-    embeddings = np.array([emb.values for emb in result.embeddings], dtype=np.float32)
+    embeddings = np.asarray(
+        [embedding.values for embedding in returned_embeddings],
+        dtype=np.float32,
+    )
 
-    # Gemini embeddings are already normalized, but we normalize again
-    # to be safe (DBSCAN with cosine metric benefits from unit vectors).
+    expected_shape = (len(texts), EMBEDDING_DIMENSIONS)
+
+    if embeddings.shape != expected_shape:
+        raise RuntimeError(
+            f"Unexpected embedding shape: {embeddings.shape}. "
+            f"Expected {expected_shape}"
+        )
+
+    if not np.isfinite(embeddings).all():
+        raise RuntimeError("Gemini returned invalid embedding values")
+
     norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-    norms[norms == 0] = 1.0
+
+    if np.any(norms == 0):
+        raise RuntimeError("Gemini returned zero-length embeddings")
+
     embeddings = embeddings / norms
+
+    logger.info(
+        "Generated %d embeddings with %d dimensions",
+        len(texts),
+        embeddings.shape[1],
+    )
 
     return embeddings
 
 
 def _parse_timestamp(value) -> pd.Timestamp | None:
-    """Parse a timestamp consistently; interpret naive timestamps as UTC."""
+    """Parse timestamps consistently; naive timestamps are interpreted as UTC."""
     if value is None:
         return None
 
@@ -112,12 +150,7 @@ def _parse_timestamp(value) -> pd.Timestamp | None:
 
 
 def _is_failure_line(line: dict) -> bool:
-    """
-    Select failure-related logs, excluding normal successful traffic.
-
-    ERROR logs are retained. WARN logs are retained when they contain
-    a recognizable failure signal.
-    """
+    """Identify failure-related log records."""
     level = str(line.get("level", "UNKNOWN")).strip().upper()
     message = str(line.get("message", ""))
 
@@ -128,13 +161,11 @@ def _is_failure_line(line: dict) -> bool:
 
 
 def _line_services(line: dict) -> set[str]:
-    """
-    Include the emitting service and downstream services named in a
-    message, such as service=payment-service.
-    """
+    """Extract emitting and downstream services."""
     services = set()
 
     service = line.get("service")
+
     if service:
         services.add(str(service).strip())
 
@@ -144,6 +175,7 @@ def _line_services(line: dict) -> set[str]:
         services.add(match.group(1).strip())
 
     services.discard("")
+
     return services
 
 
@@ -152,12 +184,13 @@ def _infer_incident_severity(
     levels: list[str],
     messages: list[str] | None = None,
 ) -> str:
-    """Infer severity from error volume, error ratio, and failure patterns."""
+    """Infer incident severity from error volume and failure patterns."""
     if line_count <= 0:
         return "low"
 
     normalized_levels = [
-        str(level).strip().upper() for level in levels
+        str(level).strip().upper()
+        for level in levels
     ]
 
     error_count = sum(
@@ -168,6 +201,7 @@ def _infer_incident_severity(
     error_ratio = error_count / line_count
 
     combined_messages = " ".join(messages or [])
+
     has_payment_failure = bool(
         re.search(
             r"payment.{0,40}(fail|timeout|error)|"
@@ -177,8 +211,6 @@ def _infer_incident_severity(
         )
     )
 
-    # Repeated payment failures are a strong signal, but this is a
-    # heuristic and should be calibrated against production incidents.
     if error_count >= 5 and error_ratio >= 0.70:
         return "critical"
 
@@ -205,20 +237,14 @@ def cluster_anomalous_lines(
     window_minutes: int = 1,
 ) -> dict:
     """
-    Extract failure-related logs from anomalous windows and group them
-    into incidents using semantic embeddings and DBSCAN.
-
-    Args:
-        anomaly_windows: Output from detect_anomalies()["anomaly_windows"].
-        parsed_lines: Parsed log records.
-        eps: DBSCAN cosine-distance threshold.
-        min_samples: Minimum records required to form a cluster.
-        window_minutes: Duration of each anomaly window.
-
-    Returns:
-        Incident clusters, noise information, and a summary.
+    Extract failure-related logs from anomalous windows and
+    group them into incidents using Gemini embeddings and DBSCAN.
     """
-    if not isinstance(window_minutes, int) or isinstance(window_minutes, bool):
+
+    if (
+        not isinstance(window_minutes, int)
+        or isinstance(window_minutes, bool)
+    ):
         raise ValueError("window_minutes must be an integer")
 
     if not 1 <= window_minutes <= 1440:
@@ -227,7 +253,10 @@ def cluster_anomalous_lines(
     if not np.isfinite(eps) or not 0 < eps <= 2:
         raise ValueError("eps must be between 0 and 2")
 
-    if not isinstance(min_samples, int) or isinstance(min_samples, bool):
+    if (
+        not isinstance(min_samples, int)
+        or isinstance(min_samples, bool)
+    ):
         raise ValueError("min_samples must be an integer")
 
     if min_samples < 1:
@@ -250,7 +279,7 @@ def cluster_anomalous_lines(
             },
         }
 
-    # Convert windows to half-open UTC intervals: [start, end).
+    # Build UTC anomaly intervals.
     intervals = []
 
     for window in anomaly_windows:
@@ -264,7 +293,10 @@ def cluster_anomalous_lines(
             continue
 
         intervals.append(
-            (start, start + pd.Timedelta(minutes=window_minutes))
+            (
+                start,
+                start + pd.Timedelta(minutes=window_minutes),
+            )
         )
 
     if not intervals:
@@ -284,7 +316,7 @@ def cluster_anomalous_lines(
             },
         }
 
-    # Restrict clustering to the flagged time intervals.
+    # Extract failure-related logs inside anomaly intervals.
     anomalous_lines = []
     seen = set()
 
@@ -302,7 +334,6 @@ def cluster_anomalous_lines(
         if not inside_window or not _is_failure_line(line):
             continue
 
-        # Avoid duplicate records if the input contains repeated objects.
         identity = (
             timestamp.isoformat(),
             str(line.get("service", "")),
@@ -317,9 +348,12 @@ def cluster_anomalous_lines(
 
         normalized_line = dict(line)
         normalized_line["_parsed_timestamp"] = timestamp
+
         anomalous_lines.append(normalized_line)
 
-    anomalous_lines.sort(key=lambda line: line["_parsed_timestamp"])
+    anomalous_lines.sort(
+        key=lambda line: line["_parsed_timestamp"]
+    )
 
     if not anomalous_lines:
         return {
@@ -330,8 +364,8 @@ def cluster_anomalous_lines(
             "total_clusters": 0,
             "summary": {
                 "message": (
-                    "Anomaly windows contained no matching failure-related "
-                    "log lines."
+                    "Anomaly windows contained no matching "
+                    "failure-related log lines."
                 ),
                 "clusters_found": 0,
                 "noise_lines": 0,
@@ -341,11 +375,10 @@ def cluster_anomalous_lines(
             },
         }
 
-    # If there are fewer records than min_samples, DBSCAN cannot form
-    # a cluster. Return them as noise rather than calling the embedding API.
     if len(anomalous_lines) < min_samples:
         samples = [
-            str(line.get("message", "")) for line in anomalous_lines[:5]
+            str(line.get("message", ""))
+            for line in anomalous_lines[:5]
         ]
 
         return {
@@ -356,8 +389,8 @@ def cluster_anomalous_lines(
             "total_clusters": 0,
             "summary": {
                 "message": (
-                    f"Only {len(anomalous_lines)} failure-related lines; "
-                    f"DBSCAN needs at least {min_samples}."
+                    f"Only {len(anomalous_lines)} failure-related "
+                    f"lines; DBSCAN needs at least {min_samples}."
                 ),
                 "clusters_found": 0,
                 "noise_lines": len(anomalous_lines),
@@ -368,16 +401,21 @@ def cluster_anomalous_lines(
         }
 
     messages = [
-        str(line.get("message") or line.get("template") or "Unknown log")
+        str(
+            line.get("message")
+            or line.get("template")
+            or "Unknown log"
+        )
         for line in anomalous_lines
     ]
 
-    # --- Gemini Embedding API call (replaces local sentence-transformers) ---
+    # Generate embeddings.
     try:
         embeddings = _get_embeddings(messages)
+
     except Exception as exc:
-        logger.error("Gemini embedding failed: %s", exc)
-        # Return a graceful error instead of crashing the entire request
+        logger.exception("Gemini embedding failed")
+
         return {
             "incidents": [],
             "noise_count": 0,
@@ -395,6 +433,7 @@ def cluster_anomalous_lines(
             },
         }
 
+    # Semantic clustering.
     dbscan = DBSCAN(
         eps=float(eps),
         min_samples=min_samples,
@@ -414,6 +453,7 @@ def cluster_anomalous_lines(
 
     incidents = []
 
+    # Build incident objects.
     for cluster_id, lines in clusters.items():
         services = set()
         levels = []
@@ -429,6 +469,7 @@ def cluster_anomalous_lines(
             )
 
             template = line.get("template")
+
             if template:
                 templates.append(str(template))
             else:
@@ -436,15 +477,25 @@ def cluster_anomalous_lines(
                     str(line.get("message", "Unknown log"))
                 )
 
-            cluster_messages.append(str(line.get("message", "")))
-            timestamps.append(line["_parsed_timestamp"])
+            cluster_messages.append(
+                str(line.get("message", ""))
+            )
+
+            timestamps.append(
+                line["_parsed_timestamp"]
+            )
 
         unique_templates = list(dict.fromkeys(templates))
+
         error_count = sum(
             level in {"ERROR", "FATAL", "CRITICAL"}
             for level in levels
         )
-        warn_count = sum(level == "WARN" for level in levels)
+
+        warn_count = sum(
+            level == "WARN"
+            for level in levels
+        )
 
         incidents.append({
             "incident_id": int(cluster_id),
@@ -466,6 +517,7 @@ def cluster_anomalous_lines(
             ),
         })
 
+    # Sort by severity and incident impact.
     incidents.sort(
         key=lambda incident: (
             incident["severity"] == "critical",
@@ -476,13 +528,30 @@ def cluster_anomalous_lines(
         reverse=True,
     )
 
-    # Reassign IDs in sorted order so the primary incident appears first.
+    # Assign IDs in priority order.
     for incident_id, incident in enumerate(incidents):
         incident["incident_id"] = incident_id
 
     noise_samples = [
-        str(line.get("message", "")) for line in noise_lines[:5]
+        str(line.get("message", ""))
+        for line in noise_lines[:5]
     ]
+
+    largest_cluster_size = max(
+        (
+            incident["line_count"]
+            for incident in incidents
+        ),
+        default=0,
+    )
+
+    logger.info(
+        "Incident clustering completed: "
+        "%d anomalous lines, %d clusters, %d noise lines",
+        len(anomalous_lines),
+        len(incidents),
+        len(noise_lines),
+    )
 
     return {
         "incidents": incidents,
@@ -493,18 +562,12 @@ def cluster_anomalous_lines(
         "summary": {
             "clusters_found": len(incidents),
             "noise_lines": len(noise_lines),
-            "largest_cluster_size": max(
-                (incident["line_count"] for incident in incidents),
-                default=0,
-            ),
+            "largest_cluster_size": largest_cluster_size,
             "eps": eps,
             "min_samples": min_samples,
             "window_minutes": window_minutes,
         },
     }
-
-
-
 
 
 
