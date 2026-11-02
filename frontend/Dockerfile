@@ -12,7 +12,13 @@ ENV UV_LINK_MODE=copy
 
 # Install curl required by UV installer
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl ca-certificates && \
+    apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    unzip \
+    zip \
+    git \
+    build-essential && \
     rm -rf /var/lib/apt/lists/*
 
 # Install UV
