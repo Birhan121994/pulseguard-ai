@@ -16,7 +16,7 @@ app = FastAPI(
 )
 
 allowed_origins = ["*"] if os.getenv("DEBUG") == "True" else [
-    "https://pulseguard-app-5lid.onrender.com",  # update after frontend deploy
+    "https://pulseguard-app-5lid.onrender.com/",  # update after frontend deploy
     "https://your-frontend-url.hf.space",     # if using HuggingFace
 ]
 
