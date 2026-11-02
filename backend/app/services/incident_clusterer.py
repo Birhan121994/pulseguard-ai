@@ -65,7 +65,7 @@ def _get_embeddings(texts: list[str]) -> np.ndarray:
 
     # Gemini's embed_content accepts a list of contents for batch embedding
     result = client.models.embed_content(
-        model="text-embedding-004",
+        model="gemini-embedding-2",
         contents=texts,
         config={
             "task_type": "CLUSTERING",  # optimal for DBSCAN clustering
