@@ -1,44 +1,49 @@
 
-# ==========================================
-# STAGE 1: BUILDER
-# ==========================================
+# =========================
+# BUILDER STAGE
+# =========================
 FROM python:3.12-slim-bookworm AS builder
 
 ARG PORT=10000
 ARG API_URL
 
 ENV PYTHONUNBUFFERED=1
-ENV UV_LINK_MODE=copy
+ENV PATH="/root/.local/bin:/app/.venv/bin:$PATH"
 
-# Install curl required by UV installer
+# Install system dependencies required by Reflex
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    curl \
-    ca-certificates \
-    unzip \
-    zip \
-    git \
-    build-essential && \
+        curl \
+        unzip \
+        ca-certificates \
+        build-essential \
+        procps && \
     rm -rf /var/lib/apt/lists/*
 
-# Install UV
+# Install uv
 ADD --chmod=755 https://astral.sh/uv/install.sh /install.sh
 RUN /install.sh && rm /install.sh
-
-ENV PATH="/root/.local/bin:$PATH"
 
 WORKDIR /app
 
 # Create virtual environment
 RUN uv venv /app/.venv
 
-ENV PATH="/app/.venv/bin:$PATH"
-
-# Copy project
+# Copy application files
 COPY . .
 
-# Install dependencies
-RUN uv pip install --no-cache -r requirements.txt
+# Install Python dependencies
+RUN uv pip install --python /app/.venv/bin/python -r requirements.txt
+
+# Explicitly ensure pandas and Plotly are installed
+RUN uv pip install --python /app/.venv/bin/python \
+    pandas==2.2.3 \
+    numpy==2.1.1 \
+    plotly==5.24.1
+
+# Verify dependencies
+RUN /app/.venv/bin/python -c \
+    "import pandas; import plotly.express as px; print('Pandas and Plotly installed successfully')"
 
 # Initialize Reflex
 RUN reflex init
@@ -51,68 +56,67 @@ RUN API_URL=${API_URL:-http://localhost:${PORT}} \
     rm -rf .web
 
 
-# ==========================================
-# STAGE 2: PRODUCTION
-# ==========================================
+# =========================
+# PRODUCTION STAGE
+# =========================
 FROM python:3.12-slim-bookworm AS production
 
 ARG PORT=10000
 
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
 ENV PORT=${PORT}
+ENV PYTHONUNBUFFERED=1
+ENV PATH="/app/.venv/bin:$PATH"
 
-# Install Caddy dependencies
-RUN apt-get update -o Acquire::Retries=3 && \
+# Install Caddy dependencies and unzip
+RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    ca-certificates \
-    curl \
-    gnupg \
-    debian-keyring \
-    debian-archive-keyring \
-    apt-transport-https && \
+        ca-certificates \
+        curl \
+        gnupg \
+        debian-keyring \
+        debian-archive-keyring \
+        apt-transport-https \
+        unzip && \
     curl -1sLf \
-    'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | \
-    gpg --dearmor \
-    -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg && \
+        'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | \
+        gpg --dearmor \
+        -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg && \
     curl -1sLf \
-    'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
-    -o /etc/apt/sources.list.d/caddy-stable.list && \
+        'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
+        -o /etc/apt/sources.list.d/caddy-stable.list && \
     chmod o+r /usr/share/keyrings/caddy-stable-archive-keyring.gpg && \
     chmod o+r /etc/apt/sources.list.d/caddy-stable.list && \
-    apt-get update -o Acquire::Retries=3 && \
+    apt-get update && \
     apt-get install -y --no-install-recommends caddy && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy virtual environment
+# Copy Python virtual environment
 COPY --from=builder /app/.venv /app/.venv
 
 # Copy application
 WORKDIR /app
 COPY --from=builder /app /app
 
-# Copy frontend
+# Copy exported frontend
 COPY --from=builder /srv /srv
 
-ENV PATH="/app/.venv/bin:$PATH"
-
 # Configure Caddy
-RUN printf ':{$PORT}\n\
-\n\
-encode gzip\n\
-\n\
-@backend_routes path /_event/* /ping /_upload /_upload/*\n\
-handle @backend_routes {\n\
-    reverse_proxy 127.0.0.1:8000\n\
-}\n\
-\n\
-root * /srv\n\
-route {\n\
-    try_files {path} {path}/ /404.html\n\
-    file_server\n\
-}\n' > /etc/caddy/Caddyfile
+RUN printf ':%s {\n\
+    encode gzip\n\
+    @backend_routes path /_event/* /ping /_upload /_upload/*\n\
+    handle @backend_routes {\n\
+        reverse_proxy 127.0.0.1:8000\n\
+    }\n\
+    handle {\n\
+        root * /srv\n\
+        try_files {path} {path}/ /404.html\n\
+        file_server\n\
+    }\n\
+}\n' "$PORT" > /etc/caddy/Caddyfile
 
-EXPOSE 10000
+EXPOSE ${PORT}
 
-# Start Caddy and Reflex
-CMD ["sh", "-c", "caddy run --config /etc/caddy/Caddyfile & reflex run --env prod --backend-only --loglevel debug"]
+STOPSIGNAL SIGTERM
+
+# Start backend and Caddy
+CMD ["sh", "-c", "reflex run --env prod --backend-only --loglevel debug & reflex_pid=$!; caddy run --config /etc/caddy/Caddyfile --adapter caddyfile & caddy_pid=$!; trap 'kill $reflex_pid $caddy_pid 2>/dev/null; wait' TERM INT; wait -n $reflex_pid $caddy_pid; exit_code=$?; kill $reflex_pid $caddy_pid 2>/dev/null; wait; exit $exit_code"]

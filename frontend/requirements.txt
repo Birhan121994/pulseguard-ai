@@ -3,3 +3,5 @@ plotly==5.24.1
 httpx
 sqlmodel==0.0.22
 pydantic==2.10.6
+pandas==2.2.3
+numpy==2.1.1
