@@ -119,4 +119,6 @@ EXPOSE ${PORT}
 STOPSIGNAL SIGTERM
 
 # Start backend and Caddy
-CMD ["sh", "-c", "reflex run --env prod --backend-only --loglevel debug & reflex_pid=$!; caddy run --config /etc/caddy/Caddyfile --adapter caddyfile & caddy_pid=$!; trap 'kill $reflex_pid $caddy_pid 2>/dev/null; wait' TERM INT; wait -n $reflex_pid $caddy_pid; exit_code=$?; kill $reflex_pid $caddy_pid 2>/dev/null; wait; exit $exit_code"]
+
+CMD ["sh", "-c", "reflex run --env prod --backend-only --loglevel debug & reflex_pid=$!; caddy run --config /etc/caddy/Caddyfile --adapter caddyfile & caddy_pid=$!; trap 'kill $reflex_pid $caddy_pid 2>/dev/null; wait $reflex_pid $caddy_pid 2>/dev/null' TERM INT; while kill -0 $reflex_pid 2>/dev/null && kill -0 $caddy_pid 2>/dev/null; do sleep 2; done; kill $reflex_pid $caddy_pid 2>/dev/null; wait $reflex_pid 2>/dev/null; wait $caddy_pid 2>/dev/null"]
+
