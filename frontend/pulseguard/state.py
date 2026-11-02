@@ -6,7 +6,7 @@ from typing import Optional
 import plotly.express as px
 from datetime import datetime, timedelta
 
-API_BASE = "http://localhost:8000"
+API_BASE = "https://pulseguard-ai-api.onrender.com"
 
 
 class Incident(rx.Base):
