@@ -1,6 +1,6 @@
 
 # ==========================================
-# STAGE 1: BUILD FRONTEND AND PYTHON ENVIRONMENT
+# STAGE 1: BUILDER
 # ==========================================
 FROM python:3.12-slim-bookworm AS builder
 
@@ -9,6 +9,11 @@ ARG API_URL
 
 ENV PYTHONUNBUFFERED=1
 ENV UV_LINK_MODE=copy
+
+# Install curl required by UV installer
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 # Install UV
 ADD --chmod=755 https://astral.sh/uv/install.sh /install.sh
@@ -23,10 +28,10 @@ RUN uv venv /app/.venv
 
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Copy application files
+# Copy project
 COPY . .
 
-# Install Python dependencies
+# Install dependencies
 RUN uv pip install --no-cache -r requirements.txt
 
 # Initialize Reflex
@@ -41,7 +46,7 @@ RUN API_URL=${API_URL:-http://localhost:${PORT}} \
 
 
 # ==========================================
-# STAGE 2: PRODUCTION IMAGE
+# STAGE 2: PRODUCTION
 # ==========================================
 FROM python:3.12-slim-bookworm AS production
 
@@ -51,7 +56,7 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PORT=${PORT}
 
-# Install dependencies and Caddy repository
+# Install Caddy dependencies
 RUN apt-get update -o Acquire::Retries=3 && \
     apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -73,14 +78,14 @@ RUN apt-get update -o Acquire::Retries=3 && \
     apt-get install -y --no-install-recommends caddy && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy Python virtual environment
+# Copy virtual environment
 COPY --from=builder /app/.venv /app/.venv
 
 # Copy application
 WORKDIR /app
 COPY --from=builder /app /app
 
-# Copy exported frontend
+# Copy frontend
 COPY --from=builder /srv /srv
 
 ENV PATH="/app/.venv/bin:$PATH"
@@ -101,8 +106,7 @@ route {\n\
     file_server\n\
 }\n' > /etc/caddy/Caddyfile
 
-# Expose Render port
 EXPOSE 10000
 
-# Start Caddy and Reflex backend
+# Start Caddy and Reflex
 CMD ["sh", "-c", "caddy run --config /etc/caddy/Caddyfile & reflex run --env prod --backend-only --loglevel debug"]
