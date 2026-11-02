@@ -90,7 +90,11 @@ COPY --from=builder /app /app
 COPY --from=builder /srv /srv
 
 # Configure Caddy
-RUN printf ':%s {\n\
+RUN printf '{\n\
+    admin off\n\
+    auto_https off\n\
+}\n\
+:%s {\n\
     encode gzip\n\
 \n\
     @backend_routes path /_event/* /ping /_upload /_upload/*\n\
