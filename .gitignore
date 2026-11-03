@@ -21,6 +21,4 @@ venv/
 .idea/
 
 # Data (large log files)
-data/logs/*.log
-data/logs/*.txt
 data/synthetic/*.json
