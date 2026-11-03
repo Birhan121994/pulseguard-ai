@@ -1,0 +1,29 @@
+2026-10-27 10:00:01 INFO [api-gateway] Request received path=/api/orders method=GET status=200 duration_ms=45
+2026-10-27 10:00:02 INFO [order-service] Processing order orderId=1001 userId=501 amount=99.99
+2026-10-27 10:00:03 INFO [payment-service] Payment initiated paymentId=2001 orderId=1001 amount=99.99
+2026-10-27 10:00:04 INFO [payment-service] Payment completed paymentId=2001 status=success
+2026-10-27 10:00:05 INFO [order-service] Order confirmed orderId=1001
+2026-10-27 10:00:10 INFO [api-gateway] Request received path=/api/orders method=GET status=200 duration_ms=38
+2026-10-27 10:00:11 INFO [order-service] Processing order orderId=1002 userId=502 amount=45.50
+2026-10-27 10:00:12 INFO [payment-service] Payment initiated paymentId=2002 orderId=1002 amount=45.50
+2026-10-27 10:00:13 ERROR [payment-service] Payment failed paymentId=2002 reason=connection_timeout db_host=db-payments-01
+2026-10-27 10:00:13 WARN [order-service] Order pending orderId=1002 reason=payment_failure
+2026-10-27 10:00:15 ERROR [payment-service] Payment failed paymentId=2003 reason=connection_timeout db_host=db-payments-01
+2026-10-27 10:00:16 ERROR [payment-service] Payment failed paymentId=2004 reason=connection_timeout db_host=db-payments-01
+2026-10-27 10:00:17 ERROR [api-gateway] Upstream timeout service=payment-service status=504 duration_ms=30000
+2026-10-27 10:00:18 ERROR [payment-service] Payment failed paymentId=2005 reason=db_pool_exhausted db_host=db-payments-01
+2026-10-27 10:00:19 ERROR [payment-service] Payment failed paymentId=2006 reason=db_pool_exhausted db_host=db-payments-01
+2026-10-27 10:00:20 ERROR [order-service] Order failed orderId=1002 reason=payment_timeout
+2026-10-27 10:00:25 INFO [api-gateway] Request received path=/api/orders method=GET status=200 duration_ms=52
+2026-10-27 10:00:26 INFO [order-service] Processing order orderId=1003 userId=503 amount=12.00
+2026-10-27 10:00:27 INFO [payment-service] Payment initiated paymentId=2007 orderId=1003 amount=12.00
+2026-10-27 10:00:28 INFO [payment-service] Payment completed paymentId=2007 status=success
+2026-10-27 10:00:29 INFO [order-service] Order confirmed orderId=1003
+2026-10-27 10:00:35 ERROR [payment-service] Payment failed paymentId=2008 reason=db_pool_exhausted db_host=db-payments-01
+2026-10-27 10:00:36 ERROR [payment-service] Payment failed paymentId=2009 reason=db_pool_exhausted db_host=db-payments-01
+2026-10-27 10:00:37 ERROR [api-gateway] Upstream timeout service=payment-service status=504 duration_ms=30000
+2026-10-27 10:00:38 ERROR [order-service] Order failed orderId=1003 reason=payment_timeout
+2026-10-27 10:00:40 INFO [api-gateway] Health check status=healthy
+2026-10-27 10:00:41 INFO [payment-service] Health check status=degraded db_pool_active=50 db_pool_max=50
+2026-10-27 10:00:42 ERROR [payment-service] Payment failed paymentId=2010 reason=db_pool_exhausted db_host=db-payments-01
+2026-10-27 10:00:43 ERROR [payment-service] Payment failed paymentId=2011 reason=db_pool_exhausted db_host=db-payments-01
