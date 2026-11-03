@@ -79,10 +79,7 @@ def dashboard() -> rx.Component:
                             rx.grid(
                                 cofailure_heatmap_card(),
                                 template_trend_card(),
-                                columns=rx.breakpoints(
-                                    initial="1",
-                                    lg="2",
-                                ),
+                                columns="1", 
                                 spacing="3",
                                 width="100%",
                             ),
